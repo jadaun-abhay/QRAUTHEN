@@ -1,3 +1,5 @@
+import uuid6
+
 from django.db import models
 from django.contrib.auth.models import AbstractUser
 
@@ -8,6 +10,14 @@ from apps.core.managers import DeleteStatusManager
 
 
 class BaseModel(models.Model):
+    BASE_MODEL_FIELDS = (
+        "id",
+        "status",
+        "created_at",
+        "updated_at",
+    )
+
+    uuid = models.UUIDField(default=uuid6.uuid6)
     status = models.IntegerField(default=Status.CREATED)
     created_at = models.DateTimeField(auto_now=True)
     updated_at = models.DateTimeField(auto_now_add=True)
@@ -19,6 +29,26 @@ class BaseModel(models.Model):
 
 
 class User(BaseModel, AbstractUser):
+    USER_MODEL_FIELDS = BaseModel.BASE_MODEL_FIELDS + (
+        "is_superuser",
+        "last_login",
+        "is_staff",
+        "is_active",
+        "date_joined",
+        "groups",
+        "user_permissions",
+    )
+
     phone_number = models.IntegerField()
 
     REQUIRED_FIELDS = []
+
+
+class UserToken(BaseModel):
+    token = models.CharField(max_length=120)
+    user = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        related_name="tokens",
+    )
