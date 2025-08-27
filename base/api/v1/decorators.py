@@ -9,15 +9,15 @@ from base.api.v1.constants import success_status_mapping
 
 def extend_schema_response(type: Any | None):
     def wrapper(func):
-        method = (getattr(func, "__name__")).lower()
-        if method is not None and callable(method):
-            return extend_schema(
-                responses={
-                    success_status_mapping.get(method): OpenApiResponse(
-                        response=type,
-                        description="Indicates that the operation is successfull.",
-                    )
-                }
-            )(func)
+        method = getattr(func, "__name__")
+        status_code = success_status_mapping.get(method)
+        return extend_schema(
+            responses={
+                status_code: OpenApiResponse(
+                    response=type,
+                    description="Indicates that the operation is successfull.",
+                )
+            }
+        )(func)
 
     return wrapper
