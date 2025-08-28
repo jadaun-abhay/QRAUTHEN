@@ -21,3 +21,6 @@ def extend_schema_response(type: Any | None):
         )(func)
 
     return wrapper
+
+
+# def extend_base_schema()
