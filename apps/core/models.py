@@ -1,7 +1,7 @@
 import uuid6
 
 from django.db import models
-from django.contrib.auth.models import AbstractUser
+from django.contrib.auth.models import AbstractUser, UserManager
 
 from apps.core.enums import Status
 from apps.core.managers import DeleteStatusManager
@@ -39,16 +39,20 @@ class User(BaseModel, AbstractUser):
         "user_permissions",
     )
 
-    phone_number = models.IntegerField()
+    phone_number = models.BigIntegerField()
 
     REQUIRED_FIELDS = []
+
+    objects = UserManager()
 
 
 class UserToken(BaseModel):
     token = models.CharField(max_length=120)
+    path = models.FileField()
+    verification_status = models.BooleanField(default=False)
     user = models.ForeignKey(
         User,
-        on_delete=models.SET_NULL,
+        on_delete=models.PROTECT,
         null=True,
         related_name="tokens",
     )
