@@ -1,10 +1,10 @@
-from django.db.models.manager import BaseManager
+from django.db.models import Manager
 
 from apps.core.enums import Status
 
 # Write your managers here
 
 
-class DeleteStatusManager(BaseManager):
+class DeleteStatusManager(Manager):
     def get_queryset(self):
         return super().get_queryset().exclude(status=Status.DELETED)
