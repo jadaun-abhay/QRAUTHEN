@@ -2,7 +2,7 @@ import base64
 from datetime import datetime
 
 from typing import Dict
-
+import asyncio
 from django.contrib.auth import authenticate, login, logout
 from django.http import StreamingHttpResponse
 
@@ -211,3 +211,26 @@ class QRAuthAV(BaseAV):
         )
         instane = self.get_instance(uuid=data.get("uuid"))
         # serializer
+
+    def put(self, request):  # TODO: Mobile scan request
+        data = request.data
+        fields = data.pop("fields", ("uuid", "verification_status", "uid"))
+        exclude = data.pop("exclude", ())
+
+        data.update(
+            {
+                "uid": request.user.uuid,
+            },
+        )
+        instane = self.get_instance(uuid=data.get("uuid"))
+        # serializer
+
+
+async def qr_sse(request):
+    async def event_stream():
+        for i in range(3):
+            qr = "some_fun"
+            yield qr
+            await asyncio.sleep(30)
+    response = StreamingHttpResponse(event_stream(),content_type="image/svg+xml")
+    return response
