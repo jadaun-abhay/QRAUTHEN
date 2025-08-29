@@ -1,5 +1,6 @@
 import jwt
 import qrcode
+import qrcode.image.svg
 
 from django.conf import settings
 
@@ -8,7 +9,7 @@ from django.conf import settings
 
 def generate_new_token(uuid):
     token = jwt.encode(
-        {"uuid": uuid},
+        {"uuid": str(uuid)},
         settings.JWT_SECRET_KEY,
         "HS256",
     )
@@ -17,6 +18,6 @@ def generate_new_token(uuid):
 
 def generate_qr_code(uuid, token):
     qr = qrcode.make(token, image_factory=qrcode.image.svg.SvgImage)
-    path = "{0}/qr.svg".format(uuid)
-    qr.save(path)
+    path = "{0}.svg".format(uuid)
+    qr.save("media/" + path)
     return path

@@ -31,6 +31,7 @@ class LoginAV(BaseAV):
     "Login/Logout API View"
 
     authentication = {
+        "get": True,
         "post": False,
     }
 
@@ -47,6 +48,7 @@ class LoginAV(BaseAV):
 
     @extend_schema_response(type=LoginSerializer(exclude=User.USER_MODEL_FIELDS))
     def get(self, request):
+        print(request.user)
         serializer = LoginSerializer(
             instance=request.user,
             exclude=User.USER_MODEL_FIELDS,
@@ -65,7 +67,7 @@ class LoginAV(BaseAV):
                         name="User Authentication",
                         value="Basic ZXJwQGtpZXQuZWR1OkBlcnA=",
                         summary="base64 encoded credentials are required",
-                        description="",
+                        description="username:password This string must be encoded in base64 format.",
                     )
                 ],
             )
@@ -102,11 +104,13 @@ class QRAuthAV(BaseAV):
 
     def get_instance(self, uuid):
         instance = UserToken.objects.filter(uuid=uuid).first()
+        print("instance_id", instance.id)
         return instance
 
     def get_verification_status(self, uuid, fields=None, exclude=None):
         start_time = datetime.now()
-        while True:
+        status = True
+        while status:
             current_time = datetime.now()
             difference = current_time - start_time
             if int(difference.total_seconds()) == 30:
@@ -128,6 +132,7 @@ class QRAuthAV(BaseAV):
                 if serializer.is_valid():
                     serializer.save()
                     yield serializer.data
+                    continue
 
             instance = self.get_instance(uuid=uuid)
             serializer = QRSerializer(
@@ -136,8 +141,10 @@ class QRAuthAV(BaseAV):
                 exclude=exclude,
             )
             if instance.verification_status:
-                return serializer.data
-            yield serializer.data
+                yield serializer.data
+                status = False
+            else:
+                yield serializer.data
 
     def get(self, request):
         params = request.query_params
@@ -153,12 +160,14 @@ class QRAuthAV(BaseAV):
         exclude = data.pop("exclude", ())
 
         uuid = params.get("uuid")
+        print("uuid")
 
         verification_response = self.get_verification_status(uuid=uuid)
+        print("verification_status", verification_response)
         response = StreamingHttpResponse(
             verification_response,
             status=status.HTTP_200_OK,
-            content_type="application/json",
+            content_type="text/event-stream",
         )
         response["Cache-Control"] = "no-cache"
         return response
@@ -177,7 +186,7 @@ class QRAuthAV(BaseAV):
         exclude = data.pop("exclude", ())
 
         data = {
-            "token": "",
+            "token": "unimportant",
         }
 
         serializer = QRSerializer(
@@ -187,5 +196,18 @@ class QRAuthAV(BaseAV):
         )
         if serializer.is_valid():
             serializer.save()
-            return Response(serializer.data, status=status.HTTP_201_CREATED)
+            return Response(serializer.validated_data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    def put(self, request):  # TODO: Mobile scan request
+        data = request.data
+        fields = data.pop("fields", ("uuid", "verification_status", "uid"))
+        exclude = data.pop("exclude", ())
+
+        data.update(
+            {
+                "uid": request.user.uuid,
+            },
+        )
+        instane = self.get_instance(uuid=data.get("uuid"))
+        # serializer

@@ -4,9 +4,11 @@ from rest_framework.permissions import BasePermission
 
 
 class AccessAuthenticationPermission(BasePermission):
+    message = "Authentication credentials were not provided"
+
     def has_permission(self, request, view):
         authentication = getattr(view, "authentication", True)
-        method = getattr(request, "method", True)
+        method = (getattr(request, "method", True)).lower()
 
         if not (
             authentication

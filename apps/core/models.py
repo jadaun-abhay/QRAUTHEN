@@ -37,6 +37,7 @@ class User(BaseModel, AbstractUser):
         "date_joined",
         "groups",
         "user_permissions",
+        "password",
     )
 
     phone_number = models.BigIntegerField()
@@ -47,8 +48,8 @@ class User(BaseModel, AbstractUser):
 
 
 class UserToken(BaseModel):
-    token = models.CharField(max_length=120)
-    path = models.FileField()
+    token = models.CharField(max_length=170, null=True)
+    path = models.FileField(null=True)
     verification_status = models.BooleanField(default=False)
     user = models.ForeignKey(
         User,

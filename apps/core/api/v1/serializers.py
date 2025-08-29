@@ -18,8 +18,20 @@ class LoginSerializer(BaseSerializer):
         fields = "__all__"
 
 
+class UserCustomRelatedField(serializers.RelatedField):
+    def to_representation(self, value):
+        return User.objects.filter(id=value).first().uuid
+
+    def to_internal_value(self, uuid):
+        return User.objects.filter(uuid=uuid).first().id
+
+
 class QRSerializer(BaseSerializer):
-    path = serializers.FileField(use_url=True)
+    uid = UserCustomRelatedField(
+        source="user_id",
+        queryset=User.objects.all(),
+        allow_null=True,
+    )
 
     class Meta:
         model = UserToken
@@ -27,7 +39,7 @@ class QRSerializer(BaseSerializer):
 
     def validate(self, data):
         token = data.get("token")
-        if token == "":
+        if token == "unimportant":
             instance = UserToken.objects.create(**data)
             data.update(
                 {
@@ -36,6 +48,17 @@ class QRSerializer(BaseSerializer):
             )
             return data
         return data
+
+    def update(self, instance, validated_data):
+        instance.verification_status = validated_data.get(
+            "validated_data",
+            instance.verification_status,
+        )
+        instance.user_id = validated_data.get(
+            "uid",
+            instance.user_id,
+        )
+        return instance
 
     def save(self):
         uuid = self.validated_data.get("uuid")
@@ -50,6 +73,7 @@ class QRSerializer(BaseSerializer):
         )
         self.validated_data.update(
             {
+                "token": token,
                 "path": path,
             }
         )
