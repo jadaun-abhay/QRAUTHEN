@@ -1,20 +1,28 @@
 import base64
+from datetime import datetime
 
 from typing import Dict
 
 from django.contrib.auth import authenticate, login, logout
+from django.http import StreamingHttpResponse
 
 from rest_framework import status
 from rest_framework.response import Response
 
-from drf_spectacular.utils import extend_schema, OpenApiParameter, OpenApiExample
+from drf_spectacular.utils import (
+    extend_schema,
+    OpenApiParameter,
+    OpenApiExample,
+)
 from drf_spectacular.types import OpenApiTypes
 
 from base.api.v1.views import BaseAV
 from base.api.v1.decorators import extend_schema_response
 
-from apps.core.api.v1.serializers import LoginSerializer
-from apps.core.models import User
+from apps.core.api.v1.serializers import LoginSerializer, QRSerializer
+from apps.core.models import User, UserToken
+from apps.core.functions import generate_new_token
+from apps.core.schema import CustomMessageSerializer
 
 # Write your views here
 
@@ -63,6 +71,7 @@ class LoginAV(BaseAV):
             )
         ]
     )
+    @extend_schema_response(type=CustomMessageSerializer)
     def post(self, request):
         auth_data = request.META.get("HTTP_AUTHORIZATION")
         print(auth_data)
@@ -79,9 +88,104 @@ class LoginAV(BaseAV):
         }
         return Response(response, status=status.HTTP_400_BAD_REQUEST)
 
+    @extend_schema_response(type=CustomMessageSerializer)
     def delete(self, request):
         logout(request)
         response = {
             "msg": "Logout successfull.",
         }
         return Response(response, status=status.HTTP_200_OK)
+
+
+class QRAuthAV(BaseAV):
+    "QR Management API View"
+
+    def get_instance(self, uuid):
+        instance = UserToken.objects.filter(uuid=uuid).first()
+        return instance
+
+    def get_verification_status(self, uuid, fields=None, exclude=None):
+        start_time = datetime.now()
+        while True:
+            current_time = datetime.now()
+            difference = current_time - start_time
+            if int(difference.total_seconds()) == 30:
+                # New QR generation
+                data = {
+                    "token": "",
+                }
+                fields = (
+                    "uuid",
+                    "token",
+                    "path",
+                )
+                exclude = None
+                serializer = QRSerializer(
+                    data=data,
+                    fields=fields,
+                    exclude=exclude,
+                )
+                if serializer.is_valid():
+                    serializer.save()
+                    yield serializer.data
+
+            instance = self.get_instance(uuid=uuid)
+            serializer = QRSerializer(
+                instance,
+                fields=fields,
+                exclude=exclude,
+            )
+            if instance.verification_status:
+                return serializer.data
+            yield serializer.data
+
+    def get(self, request):
+        params = request.query_params
+        data = request.data
+
+        fields = data.pop(
+            "fields",
+            (
+                "uuid",
+                "verification_status",
+            ),
+        )
+        exclude = data.pop("exclude", ())
+
+        uuid = params.get("uuid")
+
+        verification_response = self.get_verification_status(uuid=uuid)
+        response = StreamingHttpResponse(
+            verification_response,
+            status=status.HTTP_200_OK,
+            content_type="application/json",
+        )
+        response["Cache-Control"] = "no-cache"
+        return response
+
+    def post(self, request):
+        data = request.data
+
+        fields = data.pop(
+            "fields",
+            (
+                "uuid",
+                "token",
+                "path",
+            ),
+        )
+        exclude = data.pop("exclude", ())
+
+        data = {
+            "token": "",
+        }
+
+        serializer = QRSerializer(
+            data=data,
+            fields=fields,
+            exclude=exclude,
+        )
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
