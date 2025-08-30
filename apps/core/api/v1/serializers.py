@@ -31,7 +31,8 @@ class QRSerializer(BaseSerializer):
         source="user_id",
         queryset=User.objects.all(),
         allow_null=True,
-    )
+    ,required = False)
+    token = serializers.CharField(required=False, allow_blank=True) 
 
     class Meta:
         model = UserToken

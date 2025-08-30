@@ -1,11 +1,11 @@
 import base64
 from datetime import datetime
-
+import uuid6
+import time
 from typing import Dict
 import asyncio
 from django.contrib.auth import authenticate, login, logout
 from django.http import StreamingHttpResponse
-
 from rest_framework import status
 from rest_framework.response import Response
 
@@ -15,13 +15,13 @@ from drf_spectacular.utils import (
     OpenApiExample,
 )
 from drf_spectacular.types import OpenApiTypes
-
+from rest_framework.views import APIView
 from base.api.v1.views import BaseAV
 from base.api.v1.decorators import extend_schema_response
 
 from apps.core.api.v1.serializers import LoginSerializer, QRSerializer
 from apps.core.models import User, UserToken
-from apps.core.functions import generate_new_token
+from apps.core.functions import generate_new_token, generate_qr_code
 from apps.core.schema import CustomMessageSerializer
 
 # Write your views here
@@ -198,7 +198,7 @@ class QRAuthAV(BaseAV):
             serializer.save()
             return Response(serializer.validated_data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-
+    
     def put(self, request):  # TODO: Mobile scan request
         data = request.data
         fields = data.pop("fields", ("uuid", "verification_status", "uid"))
@@ -212,25 +212,18 @@ class QRAuthAV(BaseAV):
         instane = self.get_instance(uuid=data.get("uuid"))
         # serializer
 
-    def put(self, request):  # TODO: Mobile scan request
-        data = request.data
-        fields = data.pop("fields", ("uuid", "verification_status", "uid"))
-        exclude = data.pop("exclude", ())
-
-        data.update(
-            {
-                "uid": request.user.uuid,
-            },
-        )
-        instane = self.get_instance(uuid=data.get("uuid"))
-        # serializer
-
-
-async def qr_sse(request):
-    async def event_stream():
+    
+class QRStreamView(APIView):
+    def event_stream(self):
         for i in range(3):
-            qr = "some_fun"
-            yield qr
-            await asyncio.sleep(30)
-    response = StreamingHttpResponse(event_stream(),content_type="image/svg+xml")
-    return response
+            uid = uuid6.uuid6()
+            token = generate_new_token(uuid=uid)
+            qr_code = generate_qr_code(uuid=uid, token=token)
+            yield qr_code
+            time.sleep(30)  
+
+    def get(self, request, *args, **kwargs):
+        return StreamingHttpResponse(
+            self.event_stream(),
+            content_type="image/svg+xml"
+        )
