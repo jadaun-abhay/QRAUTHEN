@@ -48,8 +48,8 @@ class User(BaseModel, AbstractUser):
 
 
 class UserToken(BaseModel):
-    token = models.CharField(max_length=170, null=True)
-    path = models.FileField(null=True)
+    token = models.TextField(blank=True)
+    path = models.FileField(blank=True)
     verification_status = models.BooleanField(default=False)
     user = models.ForeignKey(
         User,
@@ -57,3 +57,4 @@ class UserToken(BaseModel):
         null=True,
         related_name="tokens",
     )
+    cookie = models.TextField()

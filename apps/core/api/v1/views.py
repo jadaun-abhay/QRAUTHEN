@@ -1,10 +1,15 @@
 import base64
 from datetime import datetime
+import time
+import uuid6
 
 from typing import Dict
 
+from django.conf import settings
 from django.contrib.auth import authenticate, login, logout
-from django.http import StreamingHttpResponse
+from django.core.files import File
+
+from drf_sse import SSEMixin, SSEResponse
 
 from rest_framework import status
 from rest_framework.response import Response
@@ -21,7 +26,11 @@ from base.api.v1.decorators import extend_schema_response
 
 from apps.core.api.v1.serializers import LoginSerializer, QRSerializer
 from apps.core.models import User, UserToken
-from apps.core.functions import generate_new_token
+from apps.core.functions import (
+    generate_new_token,
+    generate_cookie_value,
+    generate_qr_code,
+)
 from apps.core.schema import CustomMessageSerializer
 
 # Write your views here
@@ -48,7 +57,6 @@ class LoginAV(BaseAV):
 
     @extend_schema_response(type=LoginSerializer(exclude=User.USER_MODEL_FIELDS))
     def get(self, request):
-        print(request.user)
         serializer = LoginSerializer(
             instance=request.user,
             exclude=User.USER_MODEL_FIELDS,
@@ -76,7 +84,6 @@ class LoginAV(BaseAV):
     @extend_schema_response(type=CustomMessageSerializer)
     def post(self, request):
         auth_data = request.META.get("HTTP_AUTHORIZATION")
-        print(auth_data)
         credentials = self.decrypt_auth(auth_data)
         user = authenticate(request, **credentials)
         if user is not None:
@@ -99,115 +106,127 @@ class LoginAV(BaseAV):
         return Response(response, status=status.HTTP_200_OK)
 
 
-class QRAuthAV(BaseAV):
+class QRAuthAV(SSEMixin, BaseAV):
     "QR Management API View"
 
-    def get_instance(self, uuid):
-        instance = UserToken.objects.filter(uuid=uuid).first()
-        print("instance_id", instance.id)
+    authentication = {
+        "post": False,
+    }
+
+    user = None
+
+    def get_instance(self, uuid, token=None):
+        if token is None:
+            instance = UserToken.objects.filter(uuid=uuid).first()
+            return instance
+        instance = UserToken.objects.filter(token=token).first()
         return instance
 
-    def get_verification_status(self, uuid, fields=None, exclude=None):
-        start_time = datetime.now()
-        status = True
-        while status:
-            current_time = datetime.now()
-            difference = current_time - start_time
-            if int(difference.total_seconds()) == 30:
-                # New QR generation
-                data = {
-                    "token": "",
-                }
-                fields = (
-                    "uuid",
-                    "token",
-                    "path",
-                )
-                exclude = None
-                serializer = QRSerializer(
-                    data=data,
-                    fields=fields,
-                    exclude=exclude,
-                )
-                if serializer.is_valid():
-                    serializer.save()
-                    yield serializer.data
-                    continue
-
-            instance = self.get_instance(uuid=uuid)
-            serializer = QRSerializer(
-                instance,
-                fields=fields,
-                exclude=exclude,
-            )
-            if instance.verification_status:
-                yield serializer.data
-                status = False
-            else:
-                yield serializer.data
-
     def get(self, request):
-        params = request.query_params
-        data = request.data
-
-        fields = data.pop(
-            "fields",
-            (
-                "uuid",
-                "verification_status",
-            ),
-        )
-        exclude = data.pop("exclude", ())
-
-        uuid = params.get("uuid")
-        print("uuid")
-
-        verification_response = self.get_verification_status(uuid=uuid)
-        print("verification_status", verification_response)
-        response = StreamingHttpResponse(
-            verification_response,
-            status=status.HTTP_200_OK,
-            content_type="text/event-stream",
-        )
-        response["Cache-Control"] = "no-cache"
-        return response
+        pass
 
     def post(self, request):
-        data = request.data
 
-        fields = data.pop(
-            "fields",
-            (
-                "uuid",
-                "token",
-                "path",
-            ),
+        def get_sse_details(uuid):
+            start_time = datetime.now()
+            status = True
+            lap = 0
+
+            while status:
+                current_time = datetime.now()
+                difference = current_time - start_time
+                total_seconds = int(difference.total_seconds())
+
+                if lap == 3:
+                    response.delete_cookie("identification")
+                    break
+
+                if uuid is None and total_seconds != settings.QR_REGENRATION_TIME:
+                    # New QR generation
+                    data = {
+                        "token": "",
+                    }
+
+                    fields = (
+                        "uuid",
+                        "path",
+                    )
+                    exclude = None
+                    serializer = QRSerializer(
+                        data=data,
+                        fields=fields,
+                        exclude=exclude,
+                    )
+                    if serializer.is_valid():
+                        instance = serializer.save()
+                        uuid = instance.uuid
+                        del serializer.validated_data["cookie"]
+                        yield serializer.validated_data
+
+                else:
+                    instance = self.get_instance(uuid=uuid)
+                    fields = (
+                        "uuid",
+                        "verification_status",
+                    )
+                    serializer = QRSerializer(
+                        instance,
+                        fields=fields,
+                        exclude=exclude,
+                    )
+                    if instance.verification_status:
+                        yield serializer.data
+                        print("Now login")
+                        login(request, instance.user)
+                        status = False
+                    else:
+                        yield serializer.data
+                    if total_seconds >= settings.QR_REGENRATION_TIME:
+                        uuid = None
+                        total_seconds = 0
+                        start_time = datetime.now()
+                        lap += 1
+                time.sleep(5)
+
+        response = SSEResponse(
+            get_sse_details(uuid=None),
         )
+        response.set_cookie(
+            "identification",
+            generate_cookie_value("encode"),
+        )
+
+        return response
+
+    def put(self, request):
+        data = request.data
+        fields = data.pop("fields", ("token", "verification_status", "uid"))
         exclude = data.pop("exclude", ())
 
-        data = {
-            "token": "unimportant",
-        }
-
-        serializer = QRSerializer(
-            data=data,
-            fields=fields,
-            exclude=exclude,
-        )
-        if serializer.is_valid():
-            serializer.save()
-            return Response(serializer.validated_data, status=status.HTTP_201_CREATED)
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-
-    def put(self, request):  # TODO: Mobile scan request
-        data = request.data
-        fields = data.pop("fields", ("uuid", "verification_status", "uid"))
-        exclude = data.pop("exclude", ())
-
+        token = data.pop("scanned_token", None)
         data.update(
             {
                 "uid": request.user.uuid,
+                "token": token,
             },
         )
-        instane = self.get_instance(uuid=data.get("uuid"))
-        # serializer
+        instance = self.get_instance(uuid=None, token=token)
+        data.update(
+            {
+                "uuid": instance.uuid,
+                "verification_status": True,
+            },
+        )
+        print(data)
+        serializer = QRSerializer(
+            instance,
+            data,
+            fields=fields,
+            exclude=exclude,
+        )
+
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data, status=status.HTTP_200_OK)
+        print(serializer.errors)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
