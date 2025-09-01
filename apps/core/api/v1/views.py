@@ -1,16 +1,17 @@
 import base64
-from datetime import datetime
 import time
-import uuid6
+import json
+
+from datetime import datetime
 
 from typing import Dict
 
 from django.conf import settings
 from django.contrib.auth import authenticate, login, logout
-from django.core.files import File
 
 from drf_sse import SSEMixin, SSEResponse
 
+from rest_framework import serializers
 from rest_framework import status
 from rest_framework.response import Response
 
@@ -18,6 +19,7 @@ from drf_spectacular.utils import (
     extend_schema,
     OpenApiParameter,
     OpenApiExample,
+    inline_serializer,
 )
 from drf_spectacular.types import OpenApiTypes
 
@@ -113,8 +115,6 @@ class QRAuthAV(SSEMixin, BaseAV):
         "post": False,
     }
 
-    user = None
-
     def get_instance(self, uuid, token=None):
         if token is None:
             instance = UserToken.objects.filter(uuid=uuid).first()
@@ -122,10 +122,48 @@ class QRAuthAV(SSEMixin, BaseAV):
         instance = UserToken.objects.filter(token=token).first()
         return instance
 
-    def get(self, request):
-        pass
-
+    @extend_schema(
+        request={
+            "application/json": {
+                "type": "object",
+                "properties": {
+                    "uuid": {
+                        "type": "string",
+                        "format": "uuid",
+                        "description": "UUID Field",
+                    },
+                },
+            }
+        }
+    )
+    @extend_schema_response(CustomMessageSerializer)
     def post(self, request):
+        params = request.query_params
+        uuid = params.get("uuid")
+        instance = self.get_instance(uuid=uuid)
+        if instance.verification_status is False:
+            response = {
+                "msg": "Not verified user.",
+            }
+            return Response(response, status=status.HTTP_200_OK)
+        login(request, instance.user)
+        response = {
+            "msg": "Login successful through QR.",
+        }
+        return Response(response, status=status.HTTP_201_CREATED)
+
+    @extend_schema_response(
+        type=inline_serializer(
+            name="DeviceIdentificationSerializer",
+            fields={
+                "uuid": serializers.UUIDField(),
+                "path": serializers.StringRelatedField(required=False),
+                "verification_status": serializers.BooleanField(required=False),
+            },
+        )
+    )
+    def get(self, request):
+        "API View to send QR and start a sever sent event."
 
         def get_sse_details(uuid):
             start_time = datetime.now()
@@ -138,9 +176,11 @@ class QRAuthAV(SSEMixin, BaseAV):
                 total_seconds = int(difference.total_seconds())
 
                 if lap == 3:
+                    serializer.data["regeneration":True]
                     response.delete_cookie("identification")
                     break
 
+                print("total_seconds", total_seconds, uuid)
                 if uuid is None and total_seconds != settings.QR_REGENRATION_TIME:
                     # New QR generation
                     data = {
@@ -150,6 +190,7 @@ class QRAuthAV(SSEMixin, BaseAV):
                     fields = (
                         "uuid",
                         "path",
+                        "verification_status",
                     )
                     exclude = None
                     serializer = QRSerializer(
@@ -161,7 +202,11 @@ class QRAuthAV(SSEMixin, BaseAV):
                         instance = serializer.save()
                         uuid = instance.uuid
                         del serializer.validated_data["cookie"]
-                        yield serializer.validated_data
+                        del serializer.validated_data["token"]
+                        str_uuid = str(serializer.validated_data["uuid"])
+                        del serializer.validated_data["uuid"]
+                        serializer.validated_data["uuid"] = str_uuid
+                        yield json.dumps(serializer.validated_data)
 
                 else:
                     instance = self.get_instance(uuid=uuid)
@@ -175,12 +220,10 @@ class QRAuthAV(SSEMixin, BaseAV):
                         exclude=exclude,
                     )
                     if instance.verification_status:
-                        yield serializer.data
-                        print("Now login")
-                        login(request, instance.user)
+                        yield json.dumps(serializer.data)
                         status = False
                     else:
-                        yield serializer.data
+                        yield json.dumps(serializer.data)
                     if total_seconds >= settings.QR_REGENRATION_TIME:
                         uuid = None
                         total_seconds = 0
@@ -198,6 +241,24 @@ class QRAuthAV(SSEMixin, BaseAV):
 
         return response
 
+    @extend_schema(
+        request={
+            "application/json": {
+                "type": "object",
+                "required": [
+                    "scanned_token",
+                ],
+                "properties": {
+                    "scanned_token": {
+                        "type": "string",
+                        "format": "uuid",
+                        "description": "Token scanned after decoding QR code.",
+                    },
+                },
+            }
+        }
+    )
+    @extend_schema_response(CustomMessageSerializer)
     def put(self, request):
         data = request.data
         fields = data.pop("fields", ("token", "verification_status", "uid"))
@@ -217,7 +278,6 @@ class QRAuthAV(SSEMixin, BaseAV):
                 "verification_status": True,
             },
         )
-        print(data)
         serializer = QRSerializer(
             instance,
             data,
@@ -227,6 +287,9 @@ class QRAuthAV(SSEMixin, BaseAV):
 
         if serializer.is_valid():
             serializer.save()
-            return Response(serializer.data, status=status.HTTP_200_OK)
+            response = {
+                "msg": "Status saved.",
+            }
+            return Response(response, status=status.HTTP_200_OK)
         print(serializer.errors)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)

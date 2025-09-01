@@ -21,8 +21,8 @@ def generate_new_token(uuid):
 
 def generate_qr_code(uuid, token):
     qr = qrcode.make(token, image_factory=qrcode.image.svg.SvgImage)
-    path = "media/{0}.svg".format(uuid)
-    qr.save(path)
+    path = "{0}.svg".format(uuid)
+    qr.save("media/" + path)
     return path
 
 
