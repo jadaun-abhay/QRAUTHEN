@@ -1,6 +1,7 @@
 import base64
 import time
 import json
+import uuid6
 
 from datetime import datetime
 
@@ -95,7 +96,7 @@ class LoginAV(BaseAV):
             }
             return Response(response, status=status.HTTP_201_CREATED)
         response = {
-            "msg": "Invalid Credentials.",
+            "message": "Invalid Credentials.",
         }
         return Response(response, status=status.HTTP_400_BAD_REQUEST)
 
@@ -112,45 +113,19 @@ class QRAuthAV(SSEMixin, BaseAV):
     "QR Management API View"
 
     authentication = {
+        "get": False,
         "post": False,
     }
 
-    def get_instance(self, uuid, token=None):
+    def get_instance(self, uuid, token=None, cookie=None):
         if token is None:
             instance = UserToken.objects.filter(uuid=uuid).first()
             return instance
-        instance = UserToken.objects.filter(token=token).first()
+        elif cookie is None:
+            instance = UserToken.objects.filter(token=token).first()
+        else:
+            instance = UserToken.objects.filter(cookie=cookie).first()
         return instance
-
-    @extend_schema(
-        request={
-            "application/json": {
-                "type": "object",
-                "properties": {
-                    "uuid": {
-                        "type": "string",
-                        "format": "uuid",
-                        "description": "UUID Field",
-                    },
-                },
-            }
-        }
-    )
-    @extend_schema_response(CustomMessageSerializer)
-    def post(self, request):
-        params = request.query_params
-        uuid = params.get("uuid")
-        instance = self.get_instance(uuid=uuid)
-        if instance.verification_status is False:
-            response = {
-                "msg": "Not verified user.",
-            }
-            return Response(response, status=status.HTTP_200_OK)
-        login(request, instance.user)
-        response = {
-            "msg": "Login successful through QR.",
-        }
-        return Response(response, status=status.HTTP_201_CREATED)
 
     @extend_schema_response(
         type=inline_serializer(
@@ -165,7 +140,14 @@ class QRAuthAV(SSEMixin, BaseAV):
     def get(self, request):
         "API View to send QR and start a sever sent event."
 
-        def get_sse_details(uuid):
+        def get_sse_details(uuid, token, cookie):
+            data = {
+                "uuid": uuid,
+                "token": token,
+                "cookie": cookie,
+            }
+            uuid = None
+
             start_time = datetime.now()
             status = True
             lap = 0
@@ -176,16 +158,12 @@ class QRAuthAV(SSEMixin, BaseAV):
                 total_seconds = int(difference.total_seconds())
 
                 if lap == 3:
-                    serializer.data["regeneration":True]
                     response.delete_cookie("identification")
                     break
 
                 print("total_seconds", total_seconds, uuid)
                 if uuid is None and total_seconds != settings.QR_REGENRATION_TIME:
                     # New QR generation
-                    data = {
-                        "token": "",
-                    }
 
                     fields = (
                         "uuid",
@@ -201,12 +179,11 @@ class QRAuthAV(SSEMixin, BaseAV):
                     if serializer.is_valid():
                         instance = serializer.save()
                         uuid = instance.uuid
-                        del serializer.validated_data["cookie"]
-                        del serializer.validated_data["token"]
-                        str_uuid = str(serializer.validated_data["uuid"])
-                        del serializer.validated_data["uuid"]
-                        serializer.validated_data["uuid"] = str_uuid
-                        yield json.dumps(serializer.validated_data)
+                        serializer.validated_data["uuid"] = str(
+                            serializer.validated_data.get("uuid")
+                        )
+                        yield json.dumps(serializer.data)
+                        print("***in loop checking cookies", request.COOKIES)
 
                 else:
                     instance = self.get_instance(uuid=uuid)
@@ -214,6 +191,7 @@ class QRAuthAV(SSEMixin, BaseAV):
                         "uuid",
                         "verification_status",
                     )
+                    exclude = None
                     serializer = QRSerializer(
                         instance,
                         fields=fields,
@@ -222,24 +200,60 @@ class QRAuthAV(SSEMixin, BaseAV):
                     if instance.verification_status:
                         yield json.dumps(serializer.data)
                         status = False
+                        response.delete_cookie("identification")
                     else:
                         yield json.dumps(serializer.data)
+                        print("***?in loop checking cookies", request.COOKIES)
                     if total_seconds >= settings.QR_REGENRATION_TIME:
                         uuid = None
+                        data["uuid"] = uuid6.uuid6()
+                        data["token"] = generate_new_token(data.get("uuid"))
+                        generate_qr_code(uuid=data["uuid"], token=data["token"])
                         total_seconds = 0
                         start_time = datetime.now()
                         lap += 1
                 time.sleep(5)
 
+        uuid = uuid6.uuid6()
+        cookie_value = generate_cookie_value("encode", uuid=uuid)
+        token = generate_new_token(uuid=uuid)
+        generate_qr_code(uuid=uuid, token=token)
+
         response = SSEResponse(
-            get_sse_details(uuid=None),
+            get_sse_details(
+                uuid=uuid,
+                token=token,
+                cookie=cookie_value,
+            ),
         )
         response.set_cookie(
             "identification",
-            generate_cookie_value("encode"),
+            cookie_value,
+            samesite="Lax",
         )
 
         return response
+
+    @extend_schema_response(CustomMessageSerializer)
+    def post(self, request):
+        "API View to login the system after the server sent event has been closed."
+
+        data = request.data
+        print("PRINCE BODY", data)
+
+        uuid = data.get("uuid")
+        print("POST prince", uuid)
+        instance = self.get_instance(uuid=uuid)
+        if instance.verification_status is False:
+            response = {
+                "msg": "Not verified user.",
+            }
+            return Response(response, status=status.HTTP_200_OK)
+        login(request, instance.user)
+        response = {
+            "msg": "Login successful through QR.",
+        }
+        return Response(response, status=status.HTTP_201_CREATED)
 
     @extend_schema(
         request={
@@ -265,6 +279,11 @@ class QRAuthAV(SSEMixin, BaseAV):
         exclude = data.pop("exclude", ())
 
         token = data.pop("scanned_token", None)
+        if token is None:
+            response = {
+                "message": "Token not received",
+            }
+            return Response(response, status=status.HTTP_400_BAD_REQUEST)
         data.update(
             {
                 "uid": request.user.uuid,
@@ -272,6 +291,7 @@ class QRAuthAV(SSEMixin, BaseAV):
             },
         )
         instance = self.get_instance(uuid=None, token=token)
+        print("instance_PUT", instance)
         data.update(
             {
                 "uuid": instance.uuid,
@@ -280,16 +300,15 @@ class QRAuthAV(SSEMixin, BaseAV):
         )
         serializer = QRSerializer(
             instance,
-            data,
+            data=data,
             fields=fields,
             exclude=exclude,
         )
 
-        if serializer.is_valid():
+        if serializer.is_valid(raise_exception=True):
             serializer.save()
             response = {
                 "msg": "Status saved.",
             }
             return Response(response, status=status.HTTP_200_OK)
-        print(serializer.errors)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)

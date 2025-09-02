@@ -48,8 +48,7 @@ class User(BaseModel, AbstractUser):
 
 
 class UserToken(BaseModel):
-    token = models.TextField(blank=True)
-    path = models.FileField(blank=True)
+    token = models.TextField()
     verification_status = models.BooleanField(default=False)
     user = models.ForeignKey(
         User,

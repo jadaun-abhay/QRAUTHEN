@@ -33,51 +33,25 @@ class QRSerializer(BaseSerializer):
         allow_null=True,
     )
 
+    path = serializers.SerializerMethodField("get_path")
+
     class Meta:
         model = UserToken
         fields = "__all__"
 
-    def validate(self, data):
-        token = data.get("token")
-        if token is None:
-            instance = UserToken.objects.create(**self.initial_data)
-            data.update(
-                {
-                    "uuid": instance.uuid,
-                }
-            )
-            return data
-        else:
-            data.update(
-                {
-                    "uuid": self.instance.uuid,
-                }
-            )
-        return data
+    def get_path(self, data):
+        return "{0}.svg".format(data.get("uuid"))
 
-    def update(self, instance, validated_data):
-        instance.verification_status = validated_data.get(
-            "validated_data",
-            instance.verification_status,
-        )
-        instance.user_id = validated_data.get(
-            "uid",
-            instance.user_id,
-        )
-        return instance
+    def validate(self, data):
+        if self.instance is not None:
+            return data
+        return self.initial_data
 
     def save(self):
-        uuid = self.validated_data.get("uuid")
-        token = generate_new_token(uuid=uuid)
-        cookie = token
-        path = generate_qr_code(
-            uuid=uuid,
-            token=token,
-        )
-        path = os.path.join(
-            path,
-        )
-        self.validated_data.update({"token": token, "path": path, "cookie": cookie})
+        if self.instance is not None:
+            uuid = self.instance.uuid
+        else:
+            uuid = self.validated_data.get("uuid")
         if uuid is None:
             return UserToken.objects.create(**self.validated_data)
         return UserToken.objects.update_or_create(

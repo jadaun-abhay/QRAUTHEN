@@ -1,5 +1,4 @@
 import base64
-import io
 import jwt
 import qrcode
 import qrcode.image.svg
@@ -26,9 +25,9 @@ def generate_qr_code(uuid, token):
     return path
 
 
-def generate_cookie_value(action, message=None):
+def generate_cookie_value(action, uuid=None, message=None):
     def encode():
-        unique_string = str(uuid6.uuid6())
+        unique_string = str(uuid6.uuid6()) if uuid is None else str(uuid)
         string_bytes = unique_string.encode("ascii")
         base64_bytes = base64.b64encode(string_bytes)
         encoded = base64_bytes.decode("ascii")
